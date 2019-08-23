@@ -1,5 +1,6 @@
 #!/bin/bash
 
+BASEDIR=$(dirname $0)
 # 4. Set env vars
 cd 
 echo "PATH=/home/hadoop/hadoop/bin:/home/hadoop/hadoop/sbin:\$PATH" >> .profile
@@ -12,6 +13,6 @@ echo "export JAVA_HOME=$JAVA_HOME" >> .bashrc
 
 # 6. Copy config files
 HADOOP_CONFIG_DIR=$HOME/hadoop/etc/hadoop/
-cp "hadoop_conf/"* $HADOOP_CONFIG_DIR
+cp "$BASEDIR/hadoop_conf/"* $HADOOP_CONFIG_DIR
 
 
