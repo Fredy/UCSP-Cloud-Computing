@@ -12,6 +12,6 @@ echo "export JAVA_HOME=$JAVA_HOME" >> .bashrc
 
 # 6. Copy config files
 HADOOP_CONFIG_DIR=$HOME/hadoop/etc/hadoop/
-cp $HOME/hadoop_conf/* $HADOOP_CONFIG_DIR
+cp "hadoop_conf/"* $HADOOP_CONFIG_DIR
 
 
