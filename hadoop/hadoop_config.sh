@@ -1,3 +1,4 @@
+#!/bin/bash
 
 # 4. Set env vars
 cd 
