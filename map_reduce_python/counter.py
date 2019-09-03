@@ -1,11 +1,15 @@
 import re
+import sys
 from collections import defaultdict
 from multiprocessing import Queue, Process, Pipe, cpu_count
+
+from utils import timeit
 
 CHUNK_SIZE = 4096 * 2 ** 13  # ~33 MB
 
 M_DATA = 'M_DATA'
 M_END = 'M_END'
+
 
 # message, payload = input
 
@@ -16,6 +20,7 @@ def _count_words(data):
 
     return counter
 
+
 def _read_file(name, chunk_size=CHUNK_SIZE):
     with open(name, 'rb') as bin_file:
         while True:
@@ -24,11 +29,13 @@ def _read_file(name, chunk_size=CHUNK_SIZE):
                 break
             yield data
 
-def count_words(in_queue, out_queue):
+
+def count_words(in_queue, to_reducer, to_reader):
     """
     Count words in a string.
     :param in_queue: Input queue
-    :param out_queue: Output queue, send messages to reducer.
+    :param to_reducer: Output queue, send messages to reducer.
+    :param to_reader: Output queue, send messages to reducer.
     """
     while True:
         message, payload = in_queue.get()
@@ -37,7 +44,9 @@ def count_words(in_queue, out_queue):
 
         counts = _count_words(payload)
 
-        out_queue.put((M_DATA, counts))
+        to_reducer.put((M_DATA, counts))
+        to_reader.put((M_DATA, None))
+
 
 def reduce(in_queue, pipe_out):
     """
@@ -55,6 +64,7 @@ def reduce(in_queue, pipe_out):
             counts[word] += times
 
     pipe_out.send(counts)
+
 
 def read_file(file_name, nworkers, in_queue, out_queue):
     """
@@ -86,39 +96,50 @@ def read_file(file_name, nworkers, in_queue, out_queue):
         for j in range(nworkers):
             out_queue.put((M_DATA, data[j * size: (j + 1) * size]))
 
-if __name__ == '__main__':
-    file_name = 'complete.txt'
+    for i in range(nworkers):
+        out_queue.put((M_END, None))
+
+
+@timeit
+def map_reduce(name):
     nworkers = cpu_count()
 
     to_counter = Queue()
-    to_read = Queue()
+    to_reader = Queue()
     to_reducer = Queue()
     receiver, sender = Pipe(False)
 
     reducer = Process(target=reduce, args=(to_reducer, sender), daemon=True)
-    reader = Process(target=read_file, args=(file_name, nworkers, to_read, to_counter), daemon=True)
+    reader = Process(target=read_file,
+                     args=(name, nworkers, to_reader, to_counter),
+                     daemon=True)
 
     workers = []
     for i in range(nworkers):
-        worker = Process(target=count_words, args=(to_counter, to_reducer), daemon=True)
+        worker = Process(target=count_words,
+                         args=(to_counter, to_reducer, to_reader),
+                         daemon=True)
         workers.append(worker)
 
     reader.start()
     reducer.start()
     for w in workers:
-       w.start()
+        w.start()
 
     reader.join()
 
     for w in workers:
-        to_counter.put((M_END, None))
         w.join()
 
     to_reducer.put((M_END, None))
     data = receiver.recv()
     reducer.join()
-
-    print(data)
-
+    return data
 
 
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('Please include the file name as argument.')
+        exit(-1)
+
+    map_reduce(sys.argv[1])
