@@ -14,16 +14,7 @@ M_END = 'M_END'
 # message, payload = input
 
 def _count_words(data):
-    # counter = defaultdict(int)
-    # for i in re.finditer(rb'\w+', data):
-    #     counter[i.group()] += 1
-    # for i in data.split():
-        # counter[i] += 1
-    
-    counter = Counter(data.split())
-
-    return counter
-
+    return Counter(data.split())
 
 def _read_file(name, chunk_size=CHUNK_SIZE):
     with open(name, 'rb') as bin_file:
@@ -64,9 +55,7 @@ def reduce(in_queue, pipe_out):
         message, payload = in_queue.get()
         if message == M_END:
             break
-    counts.update(payload)
-        # for word, times in payload.items():
-            # counts[word] += times
+        counts.update(payload)
 
     pipe_out.send(counts)
 
@@ -85,7 +74,7 @@ def read_file(file_name, nworkers, in_queue, out_queue):
     for i in range(2):
         data = next(file_iterator, None)
         if data is None:
-            return
+            return # TODO: first M_END should be passed to out_queue
 
         size = len(data) // nworkers
         for j in range(nworkers):
