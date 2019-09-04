@@ -1,6 +1,6 @@
 import re
 import sys
-from collections import defaultdict
+from collections import defaultdict, Counter
 from multiprocessing import Queue, Process, Pipe, cpu_count
 
 from utils import timeit
@@ -14,9 +14,13 @@ M_END = 'M_END'
 # message, payload = input
 
 def _count_words(data):
-    counter = defaultdict(int)
-    for i in re.finditer(rb'\w+', data):
-        counter[i.group()] += 1
+    # counter = defaultdict(int)
+    # for i in re.finditer(rb'\w+', data):
+    #     counter[i.group()] += 1
+    # for i in data.split():
+        # counter[i] += 1
+    
+    counter = Counter(data.split())
 
     return counter
 
@@ -54,14 +58,15 @@ def reduce(in_queue, pipe_out):
     :param in_queue: Input queue.
     :param pipe_out: Output pipe, send messages to the parent process.
     """
-    counts = defaultdict(int)
+    # counts = defaultdict(int)
+    counts = Counter()
     while True:
         message, payload = in_queue.get()
         if message == M_END:
             break
-
-        for word, times in payload.items():
-            counts[word] += times
+    counts.update(payload)
+        # for word, times in payload.items():
+            # counts[word] += times
 
     pipe_out.send(counts)
 
