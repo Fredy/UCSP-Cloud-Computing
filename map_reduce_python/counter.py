@@ -1,9 +1,11 @@
 import re
 import sys
+import csv
 from collections import defaultdict, Counter
 from multiprocessing import Queue, Process, Pipe, cpu_count
 
 from utils import timeit
+
 
 CHUNK_SIZE = 4096 * 2 ** 13  # ~33 MB
 
@@ -13,8 +15,8 @@ M_END = 'M_END'
 
 # message, payload = input
 
-def _count_words(data):
-    return Counter(data.split())
+def _count_words(data, counter):
+    counter.update(data.split())
 
 def _read_file(name, chunk_size=CHUNK_SIZE):
     with open(name, 'rb') as bin_file:
@@ -32,15 +34,16 @@ def count_words(in_queue, to_reducer, to_reader):
     :param to_reducer: Output queue, send messages to reducer.
     :param to_reader: Output queue, send messages to reducer.
     """
-    while True:
-        message, payload = in_queue.get()
-        if message == M_END:
-            break
+    
+    counter = Counter()
+    message, payload = in_queue.get()
+    while message != M_END:
+        _count_words(payload, counter)
 
-        counts = _count_words(payload)
-
-        to_reducer.put((M_DATA, counts))
         to_reader.put((M_DATA, None))
+        message, payload = in_queue.get()
+
+    to_reducer.put((M_DATA, counter))
 
 
 def reduce(in_queue, pipe_out):
@@ -51,11 +54,10 @@ def reduce(in_queue, pipe_out):
     """
     # counts = defaultdict(int)
     counts = Counter()
-    while True:
-        message, payload = in_queue.get()
-        if message == M_END:
-            break
+    message, payload = in_queue.get()
+    while message != M_END:
         counts.update(payload)
+        message, payload = in_queue.get()
 
     pipe_out.send(counts)
 
@@ -136,4 +138,9 @@ if __name__ == '__main__':
         print('Please include the file name as argument.')
         exit(-1)
 
-    map_reduce(sys.argv[1])
+    data =    map_reduce(sys.argv[1])
+
+    with open('output_py.csv', 'w') as out_file:
+        csv_writer = csv.writer(out_file, delimiter=' ')
+        for key, val in data.items():
+            csv_writer.writerow((key.decode('utf-8'), val))

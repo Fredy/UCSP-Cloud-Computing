@@ -1,4 +1,9 @@
+#include "mtime.hpp"
 #include "tbb/concurrent_queue.h"
+#include <algorithm>
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <fstream>
 #include <iostream>
 #include <regex>
 #include <string>
@@ -6,8 +11,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <fstream>
-#include <algorithm>
+#include <deque>
 
 using namespace std;
 
@@ -43,117 +47,114 @@ template <typename T> void process_two(MessageQueue<T> &output_queue) {
   }
 }
 
-Counter _count_words(const string &s) {
-  const string rgx_str = "\\s+";
-  Counter counter;
-
-  regex rgx(rgx_str);
-
-  sregex_token_iterator iter(s.begin(), s.end(), rgx, -1);
-  sregex_token_iterator end;
-
-  while (iter != end) {
-    counter[*iter]++;
-    iter++;
-  }
-
-  return counter;
-}
-
 void read_file(const string &name, const int workers,
-               MessageQueue<void *> &in_queue, MessageQueue<string> &to_counter) {
+               MessageQueue<void *> &in_queue,
+               MessageQueue<string> &to_counter) {
   string buffer(CHUNK_SIZE, '\0');
   ifstream file(name);
 
-  for(size_t i =0; i < 2; i++) {
+  for (size_t i = 0; i < 2; i++) {
     if (!file) {
       break;
     }
     file.read(&buffer[0], CHUNK_SIZE);
     const size_t chars_readed = file.gcount();
-    
-    const size_t size = (chars_readed + workers ) / workers;
+
+    const size_t size = (chars_readed + workers) / workers;
     for (size_t j = 0; j < workers; j++) {
       size_t start = j * size;
       size_t end = min((j + 1) * size, chars_readed);
-      string data = buffer.substr(start, end); 
-      to_counter.push({M_DATA, data});
+      string data = buffer.substr(start, end);
+      to_counter.push({M_DATA, move(data)});
     }
   }
 
-  while(file) {
+  while (file) {
     file.read(&buffer[0], CHUNK_SIZE);
     const size_t chars_readed = file.gcount();
 
-    const size_t size = (chars_readed + workers ) / workers;
+    for (size_t j = 0; j < workers; j++) {
+      Message<void *> message;
+      in_queue.pop(message);
+    }
+
+    const size_t size = (chars_readed + workers) / workers;
     for (size_t j = 0; j < workers; j++) {
       size_t start = j * size;
       size_t end = min((j + 1) * size, chars_readed);
-      string data = buffer.substr(start, end); 
-      to_counter.push({M_DATA, data});
+      string data = buffer.substr(start, end);
+      to_counter.push({M_DATA, move(data)});
     }
-
-  } 
+  }
   for (size_t i = 0; i < workers; i++) {
     to_counter.push({M_END, ""});
   }
+  file.close();
+}
 
+void _count_words(const string &s, Counter & output) {
+  deque<string> strings;
+  boost::split(strings, s, boost::is_any_of("\n "));
 
+  for (const auto &str : strings) {
+    output[str]++;
+  }
 }
 
 void count_words(MessageQueue<string> &in_queue,
                  MessageQueue<Counter> &to_reducer,
                  MessageQueue<void *> &to_reader) {
-
+  Counter counter;
   Message<string> message;
-  while (true) {
-    in_queue.pop(message);
-    if (message.first == M_END) {
-      break;
-    }
-    Counter counter = _count_words(message.second);
 
-    to_reducer.push(Message<Counter>(M_DATA, move(counter)));
-    to_reader.push(Message<void *>(M_DATA, nullptr));
+  in_queue.pop(message);
+
+  while (message.first != M_END) {
+    _count_words(message.second, counter);
+
+    to_reader.push({M_DATA, nullptr});
+    in_queue.pop(message);
   }
+  to_reducer.push({M_DATA, move(counter)});
 }
 
-void reduce(MessageQueue<Counter> &in_queue, MessageQueue<Counter> &out_queue ) {
+void reduce(MessageQueue<Counter> &in_queue, MessageQueue<Counter> &out_queue) {
   Counter counter;
-  while (true) {
-    Message<Counter> message;
-    in_queue.pop(message);
-    if (message.first == M_END) {
-      break;
-    }
-    for (const auto&data : message.second) {
+  Message<Counter> message;
+
+  in_queue.pop(message);
+  while (message.first != M_END) {
+    for (const auto &data : message.second) {
       counter[data.first] += data.second;
     }
+
+    in_queue.pop(message);
   }
 
   out_queue.push({M_DATA, counter});
-
 }
 
-Counter map_reduce(const string& file_name) {
+Counter map_reduce(const string &file_name) {
   const size_t nworkers = thread::hardware_concurrency();
 
-  MessageQueue<string>  to_counter;
+  MessageQueue<string> to_counter;
   MessageQueue<void *> to_reader;
   MessageQueue<Counter> to_reducer;
   MessageQueue<Counter> output;
 
   thread reducer(reduce, ref(to_reducer), ref(output));
-  thread reader(ref(file_name), nworkers, ref(to_reader), ref(to_counter));
+  thread reader(read_file, ref(file_name), nworkers, ref(to_reader),
+                ref(to_counter));
 
   vector<thread> workers(nworkers);
-  for (auto & worker : workers) {
-    worker = thread(count_words, ref(to_counter), ref(to_reducer), ref(to_reader));
+  for (auto &worker : workers) {
+    worker =
+        thread(count_words, ref(to_counter), ref(to_reducer), ref(to_reader));
   }
 
   reader.join();
 
-  for ( auto & worker : workers) {
+  for (auto &worker : workers) {
     worker.join();
   }
   to_reducer.push({M_END, {}});
@@ -166,14 +167,21 @@ Counter map_reduce(const string& file_name) {
   return data.second;
 }
 
-int main() {
-  // MessageQueue<string> queue;
-  // thread t1(process_one<string>, ref(queue));
-  // thread t2(process_two<string>, ref(queue));
-  // t1.join();
-  // t2.join();
+int main(int argc, char *argv[]) {
+  if (argc < 2) {
+    cout << "Please include the file name as argument." << endl;
+    return -1;
+  }
+  Counter data;
 
-  auto data = map_reduce("../complete.txt");
+  auto time = mtime::mTime([&]() { data = map_reduce(argv[1]); });
 
+  cout << time / 1000.0 << endl;
 
+  ofstream csv_file("cpp_output.csv");
+
+  for (const auto &pair_ : data) {
+    csv_file << pair_.first << " " << pair_.second << '\n';
+  }
+  csv_file.close();
 }
